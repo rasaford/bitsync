@@ -473,7 +473,7 @@ type MetaDataExchange struct {
 	Pieces       [][]byte
 }
 
-func getTrackerInfo(dialer proxy.Dialer, url string) (tr *TrackerResponse, err error) {
+func TrackerInfo(dialer proxy.Dialer, url string) (tr *TrackerResponse, err error) {
 	r, err := tproxy.HttpGet(dialer, url)
 	if err != nil {
 		return
@@ -496,7 +496,7 @@ func getTrackerInfo(dialer proxy.Dialer, url string) (tr *TrackerResponse, err e
 	return
 }
 
-func saveMetaInfo(metadata string) (err error) {
+func SaveMetaInfo(metadata string) (err error) {
 	var info file.InfoDict
 	err = bencode.Unmarshal(bytes.NewReader([]byte(metadata)), &info)
 	if err != nil {

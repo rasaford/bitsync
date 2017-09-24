@@ -74,27 +74,27 @@ func (r *HdCacheProvider) cacheClosed(infohash string) {
 	r.rebalance()
 }
 
-//'pieceSize' is the size of the average piece
-//'capacity' is how many pieces the cache can hold
-//'actualUsage' is how many pieces the cache has at the moment
-//'atime' is an array of access times for each stored box
-//'boxExists' indicates if a box is existent in cache
-//'boxPrefix' is the partial path to the boxes.
-//'torrentLength' is the number of bytes in the torrent
-//'cacheProvider' is a pointer to the cacheProvider that created this cache
-//'infohash' is the infohash of the torrent
-//'underlying' is the FileStore we're caching
 type HdCache struct {
-	pieceSize     int64
-	capacity      *uint32 //Access only through getter/setter
-	actualUsage   int
-	atimes        []time.Time
-	boxExists     bitset.Bitset
-	boxPrefix     string
+	//pieceSize is the size of the average piece
+	pieceSize int64
+	//capacity is how many pieces the cache can hold
+	capacity *uint32 //Access only through getter/setter
+	//actualUsage is how many pieces the cache has at the moment
+	actualUsage int
+	//atimes is an array of access times for each stored box
+	atimes []time.Time
+	//boxExists indicates if a box is existent in cache
+	boxExists bitset.Bitset
+	//boxPrefix is the partial path to the boxes.
+	boxPrefix string
+	//torrentLength is the number of bytes in the torrent
 	torrentLength int64
+	//cacheProvider is a pointer to the cacheProvider that created this cache
 	cacheProvider *HdCacheProvider
-	infohash      string
-	underlying    file.FileStore
+	//infohash is the infohash of the torrent
+	infohash string
+	//underlying is the FileStore we're caching
+	underlying file.FileStore
 }
 
 func (r *HdCache) Close() error {

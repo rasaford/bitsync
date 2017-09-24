@@ -1,12 +1,11 @@
 package main
 
 import (
-	"crypto/sha256"
 	"flag"
-	"os"
-	"os/signal"
+	"log"
 
 	"github.com/rasaford/bitsync/defaults"
+	"github.com/rasaford/bitsync/torrent"
 	"github.com/rasaford/bitsync/torrent/file"
 )
 
@@ -20,12 +19,9 @@ func main() {
 }
 
 func commit() {
-	file.Create(defaults.DefaultFolder)
+	path, err := file.Create(defaults.DefaultFolder)
+	if err != nil {
+		log.Fatal(err)
+	}
+	torrent.Start(path)
 }
-
-func hashSha256(input string) string {
-	hash := sha256.New()
-	hash.Write([]byte(input))
-	return string(hash.Sum(nil))
-}
-

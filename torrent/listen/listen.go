@@ -31,6 +31,15 @@ func NewBtConn(conn net.Conn, remoteAddr net.Addr, header []byte, infoHash strin
 	}
 }
 
+// ID returns the id of the BtConn
+func (b *BtConn) ID() string {
+	return b.id
+}
+
+func (b *BtConn) ReadHeader() []byte {
+	return b.header
+}
+
 // ListenForPeerConnections listens on a TCP port for incoming connections and
 // demuxes them to the appropriate active torrentSession based on the InfoHash
 // in the header.

@@ -7,9 +7,11 @@ import (
 	"net"
 	"time"
 
-	"github.com/jackpal/Taipei-Torrent/torrent"
 	bencode "github.com/jackpal/bencode-go"
+	"github.com/rasaford/bitsync/torrent/accumulator"
+	"github.com/rasaford/bitsync/torrent/bitset"
 	"github.com/rasaford/bitsync/torrent/conf"
+	"github.com/rasaford/bitsync/torrent/convert"
 )
 
 const MAX_OUR_REQUESTS = 2
@@ -17,38 +19,36 @@ const MAX_PEER_REQUESTS = 10
 const STANDARD_BLOCK_LENGTH = 16 * 1024
 
 type PeerMessage struct {
-	peer    *PeerState
-	message []byte // nil means an error occurred
+	Peer    *PeerState
+	Message []byte // nil means an error occurred
 }
 
 type PeerState struct {
-	address         string
-	id              string
-	writeChan       chan []byte
-	writeChan2      chan []byte
-	lastReadTime    time.Time
-	have            *torrent.Bitset // What the peer has told us it has
-	conn            net.Conn
-	am_choking      bool // this client is choking the peer
-	am_interested   bool // this client is interested in the peer
-	peer_choking    bool // peer is choking this client
-	peer_interested bool // peer is interested in this client
-	peer_requests   map[uint64]bool
-	our_requests    map[uint64]time.Time // What we requested, when we requested it
+	Address        string
+	ID             string
+	writeChan      chan []byte
+	writeChan2     chan []byte
+	LastReadTime   time.Time
+	Have           *bitset.Bitset // What the peer has told us it has
+	conn           net.Conn
+	AmChoking      bool // this client is choking the peer
+	AmInterested   bool // this client is interested in the peer
+	PeerChoking    bool // peer is choking this client
+	PeerInterested bool // peer is interested in this client
+	PeerRequests   map[uint64]bool
+	OurRequests    map[uint64]time.Time // What we requested, when we requested it
 
 	// This field tells if the peer can send a bitfield or not
-	can_receive_bitfield bool
-
-	theirExtensions map[string]int
-
-	downloaded torrent.Accumulator
+	CanReceive      bool
+	TheirExtensions map[string]int
+	downloaded      accumulator.Accumulator
 }
 
-func (p *PeerState) creditDownload(length int64) {
+func (p *PeerState) CreditDownload(length int64) {
 	p.downloaded.Add(time.Now(), length)
 }
 
-func (p *PeerState) computeDownloadRate() {
+func (p *PeerState) ComputeDownloadRate() {
 	// Has the side effect of computing the download rate.
 	p.downloaded.GetRate(time.Now())
 }
@@ -95,10 +95,11 @@ func NewPeerState(conn net.Conn) *PeerState {
 	writeChan2 := make(chan []byte)
 	go queueingWriter(writeChan, writeChan2)
 	return &PeerState{writeChan: writeChan, writeChan2: writeChan2, conn: conn,
-		am_choking: true, peer_choking: true,
-		peer_requests:        make(map[uint64]bool, MAX_PEER_REQUESTS),
-		our_requests:         make(map[uint64]time.Time, MAX_OUR_REQUESTS),
-		can_receive_bitfield: true}
+		AmChoking:    true,
+		PeerChoking:  true,
+		PeerRequests: make(map[uint64]bool, MAX_PEER_REQUESTS),
+		OurRequests:  make(map[uint64]time.Time, MAX_OUR_REQUESTS),
+		CanReceive:   true}
 }
 
 func (p *PeerState) Close() {
@@ -108,21 +109,21 @@ func (p *PeerState) Close() {
 }
 
 func (p *PeerState) AddRequest(index, begin, length uint32) {
-	if !p.am_choking && len(p.peer_requests) < MAX_PEER_REQUESTS {
+	if !p.AmChoking && len(p.PeerRequests) < MAX_PEER_REQUESTS {
 		offset := (uint64(index) << 32) | uint64(begin)
-		p.peer_requests[offset] = true
+		p.PeerRequests[offset] = true
 	}
 }
 
 func (p *PeerState) CancelRequest(index, begin, length uint32) {
 	offset := (uint64(index) << 32) | uint64(begin)
-	if _, ok := p.peer_requests[offset]; ok {
-		delete(p.peer_requests, offset)
+	if _, ok := p.PeerRequests[offset]; ok {
+		delete(p.PeerRequests, offset)
 	}
 }
 
 func (p *PeerState) RemoveRequest() (index, begin, length uint32, ok bool) {
-	for k, _ := range p.peer_requests {
+	for k, _ := range p.PeerRequests {
 		index, begin = uint32(k>>32), uint32(k)
 		length = STANDARD_BLOCK_LENGTH
 		ok = true
@@ -132,21 +133,21 @@ func (p *PeerState) RemoveRequest() (index, begin, length uint32, ok bool) {
 }
 
 func (p *PeerState) SetChoke(choke bool) {
-	if choke != p.am_choking {
-		p.am_choking = choke
+	if choke != p.AmChoking {
+		p.AmChoking = choke
 		b := byte(conf.UNCHOKE)
 		if choke {
 			b = conf.CHOKE
-			p.peer_requests = make(map[uint64]bool, MAX_PEER_REQUESTS)
+			p.PeerRequests = make(map[uint64]bool, MAX_PEER_REQUESTS)
 		}
 		p.sendOneCharMessage(b)
 	}
 }
 
 func (p *PeerState) SetInterested(interested bool) {
-	if interested != p.am_interested {
+	if interested != p.AmInterested {
 		// log.Println("SetInterested", interested, p.address)
-		p.am_interested = interested
+		p.AmInterested = interested
 		b := byte(conf.NOT_INTERESTED)
 		if interested {
 			b = conf.INTERESTED
@@ -155,11 +156,11 @@ func (p *PeerState) SetInterested(interested bool) {
 	}
 }
 
-func (p *PeerState) SendBitfield(bs *torrent.Bitset) {
+func (p *PeerState) SendBitfield(bs *bitset.Bitset) {
 	msg := make([]byte, len(bs.Bytes())+1)
 	msg[0] = conf.BITFIELD
 	copy(msg[1:], bs.Bytes())
-	p.sendMessage(msg)
+	p.SendMessage(msg)
 }
 
 func (p *PeerState) SendExtensions(port uint16) {
@@ -182,43 +183,30 @@ func (p *PeerState) SendExtensions(port uint16) {
 	msg[1] = conf.EXTENSION_HANDSHAKE
 	copy(msg[2:], buf.Bytes())
 
-	p.sendMessage(msg)
+	p.SendMessage(msg)
 }
 
 func (p *PeerState) sendOneCharMessage(b byte) {
 	// log.Println("ocm", b, p.address)
-	p.sendMessage([]byte{b})
+	p.SendMessage([]byte{b})
 }
 
-func (p *PeerState) sendMessage(b []byte) {
+func (p *PeerState) SendMessage(b []byte) {
 	p.writeChan <- b
 }
 
-func (p *PeerState) keepAlive(now time.Time) {
-	p.sendMessage([]byte{})
+func (p *PeerState) KeepAlive(now time.Time) {
+	p.SendMessage([]byte{})
 }
 
 // There's two goroutines per peer, one to read data from the peer, the other to
 // send data to the peer.
 
-func uint32ToBytes(buf []byte, n uint32) {
-	buf[0] = byte(n >> 24)
-	buf[1] = byte(n >> 16)
-	buf[2] = byte(n >> 8)
-	buf[3] = byte(n)
-}
-
 func writeNBOUint32(conn net.Conn, n uint32) (err error) {
 	var buf []byte = make([]byte, 4)
-	uint32ToBytes(buf, n)
+	convert.Uint32ToBytes(buf, n)
 	_, err = conn.Write(buf[0:])
 	return
-}
-
-func bytesToUint32(buf []byte) uint32 {
-	return (uint32(buf[0]) << 24) |
-		(uint32(buf[1]) << 16) |
-		(uint32(buf[2]) << 8) | uint32(buf[3])
 }
 
 func readNBOUint32(conn net.Conn) (n uint32, err error) {
@@ -227,14 +215,13 @@ func readNBOUint32(conn net.Conn) (n uint32, err error) {
 	if err != nil {
 		return
 	}
-	n = bytesToUint32(buf[0:])
+	n = convert.BytesToUint32(buf[0:])
 	return
 }
 
 // This func is designed to be run as a goroutine. It
 // listens for messages on a channel and sends them to a peer.
-
-func (p *PeerState) peerWriter(errorChan chan PeerMessage) {
+func (p *PeerState) PeerWriter(errorChan chan PeerMessage) {
 	// log.Println("Writing messages")
 	var lastWriteTime time.Time
 
@@ -269,8 +256,7 @@ func (p *PeerState) peerWriter(errorChan chan PeerMessage) {
 
 // This func is designed to be run as a goroutine. It
 // listens for messages from the peer and forwards them to a channel.
-
-func (p *PeerState) peerReader(msgChan chan PeerMessage) {
+func (p *PeerState) PeerReader(msgChan chan<- PeerMessage) {
 	// log.Println("Reading messages")
 	for {
 		var n uint32
@@ -290,7 +276,6 @@ func (p *PeerState) peerReader(msgChan chan PeerMessage) {
 		} else {
 			buf = make([]byte, n)
 		}
-
 		_, err = io.ReadFull(p.conn, buf)
 		if err != nil {
 			break
@@ -302,14 +287,13 @@ func (p *PeerState) peerReader(msgChan chan PeerMessage) {
 	// log.Println("peerReader exiting")
 }
 
-func (p *PeerState) sendMetadataRequest(piece int) {
-	log.Printf("Sending metadata request for piece %d to %s\n", piece, p.address)
+func (p *PeerState) SendMetadataRequest(piece int) {
+	log.Printf("Sending metadata request for piece %d to %s\n", piece, p.Address)
 
 	m := map[string]int{
 		"msg_type": conf.METADATA_REQUEST,
 		"piece":    piece,
 	}
-
 	var raw bytes.Buffer
 	err := bencode.Marshal(&raw, m)
 	if err != nil {
@@ -318,8 +302,8 @@ func (p *PeerState) sendMetadataRequest(piece int) {
 
 	msg := make([]byte, raw.Len()+2)
 	msg[0] = conf.EXTENSION
-	msg[1] = byte(p.theirExtensions["ut_metadata"])
+	msg[1] = byte(p.TheirExtensions["ut_metadata"])
 	copy(msg[2:], raw.Bytes())
 
-	p.sendMessage(msg)
+	p.SendMessage(msg)
 }

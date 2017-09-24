@@ -98,7 +98,7 @@ func hashPiece(h chan chunk, result chan chunk) {
 	}
 }
 
-func checkPiece(piece []byte, m *MetaInfo, pieceIndex int) (good bool, err error) {
+func CheckPiece(piece []byte, m *MetaInfo, pieceIndex int) (good bool, err error) {
 	ref := m.Info.Pieces
 	var currentSum []byte
 	currentSum, err = computePieceSum(piece)

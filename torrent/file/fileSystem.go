@@ -11,16 +11,16 @@ import (
 )
 
 // Create creates a torrent file indexing all the files in the given directory.
-func Create(dir string) error {
+func Create(dir string) (string, error) {
 	path := path.Join(dir, defaults.TorrentFileName)
 	f, err := createFile(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 	writeTorrent(dir, f)
 	log.Printf("torrent file created at %s\n", path)
-	return nil
+	return path, nil
 }
 
 func createFile(fileDir string) (*os.File, error) {

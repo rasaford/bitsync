@@ -8,14 +8,15 @@ import (
 
 	"github.com/nictuku/dht"
 	"github.com/rasaford/bitsync/torrent/conf"
+	"github.com/rasaford/bitsync/torrent/ldp"
 	"github.com/rasaford/bitsync/torrent/listen"
 )
 
-func Start(options ...func(*conf.Flags)) {
+func Start(path string, options ...func(*conf.Flags)) {
 	flags := &conf.Flags{
 		Port:                12345,
-		UseDeadLockDetector: false,
-		UseLDP:              true,
+		UseDeadlockDetector: false,
+		UseLPD:              true,
 		UseUPnP:             false,
 		UseNATPMP:           true,
 		TrackerlessMode:     true,
@@ -25,6 +26,10 @@ func Start(options ...func(*conf.Flags)) {
 	for _, option := range options {
 		option(flags)
 	}
+	startTorrent(flags, []string{path})
+}
+
+func startTorrent(flags *conf.Flags, torrentFiles []string) error {
 	conn, port, err := listen.ListenForPeerConnections(flags)
 	if err != nil {
 		log.Println("could not listen for peer connection ", err)
@@ -58,15 +63,14 @@ func Start(options ...func(*conf.Flags)) {
 
 	for i, torrentFile := range torrentFiles {
 		if i < flags.MaxActive {
-			createChan <- torrentFile
+			create <- torrentFile
 		} else {
 			break
 		}
 	}
-
-	lpd := &Announcer{}
+	lpdAnnouncer := &ldp.Announcer{}
 	if flags.UseLPD {
-		lpd, err = NewAnnouncer(uint16(listenPort))
+		lpdAnnouncer, err = ldp.NewAnnouncer(uint16(port))
 		if err != nil {
 			log.Println("Couldn't listen for Local Peer Discoveries: ", err)
 			flags.UseLPD = false
@@ -74,44 +78,44 @@ func Start(options ...func(*conf.Flags)) {
 	}
 
 	theWorldisEnding := false
-mainLoop:
+main:
 	for {
 		select {
-		case ts := <-startChan:
+		case ts := <-start:
 			if !theWorldisEnding {
 				ts.dht = &dhtNode
 				if flags.UseLPD {
-					lpd.Announce(ts.M.InfoHash)
+					lpdAnnouncer.Announce(ts.M.InfoHash)
 				}
 				torrentSessions[ts.M.InfoHash] = ts
 				log.Printf("Starting torrent session for %s", ts.M.Info.Name)
 				go func(t *TorrentSession) {
 					t.DoTorrent()
-					doneChan <- t
+					done <- t
 				}(ts)
 			}
-		case ts := <-doneChan:
+		case ts := <-done:
 			if ts.M != nil {
 				delete(torrentSessions, ts.M.InfoHash)
 				if flags.UseLPD {
-					lpd.StopAnnouncing(ts.M.InfoHash)
+					lpdAnnouncer.StopAnnouncing(ts.M.InfoHash)
 				}
 			}
 			if !theWorldisEnding && len(torrentQueue) > 0 {
-				createChan <- torrentQueue[0]
+				create <- torrentQueue[0]
 				torrentQueue = torrentQueue[1:]
-				continue mainLoop
+				continue main
 			}
 
 			if len(torrentSessions) == 0 {
-				break mainLoop
+				break main
 			}
-		case <-quitChan:
+		case <-quit:
 			theWorldisEnding = true
 			for _, ts := range torrentSessions {
 				go ts.Quit()
 			}
-		case c := <-conChan:
+		case c := <-conn:
 			//	log.Printf("New bt connection for ih %x", c.Infohash)
 			if ts, ok := torrentSessions[c.Infohash]; ok {
 				ts.AcceptNewPeer(c)
@@ -128,7 +132,7 @@ mainLoop:
 					log.Printf("Received DHT peer for an unknown torrent session %x\n", []byte(key))
 				}
 			}
-		case announce := <-lpd.Announces:
+		case announce := <-lpdAnnouncer.Announces:
 			hexhash, err := hex.DecodeString(announce.Infohash)
 			if err != nil {
 				log.Println("Err with hex-decoding:", err)
@@ -142,22 +146,20 @@ mainLoop:
 	if flags.UseDHT {
 		dhtNode.Stop()
 	}
-	return
+	return err
 }
 
 func startDHT(listenPort int) *dht.DHT {
 	// TODO: UPnP UDP port mapping.
 	cfg := dht.NewConfig()
 	cfg.Port = listenPort
-	cfg.NumTargetPeers = TARGET_NUM_PEERS
+	cfg.NumTargetPeers = conf.TARGET_NUM_PEERS
 	dhtnode, err := dht.New(cfg)
 	if err != nil {
 		log.Println("DHT node creation error:", err)
 		return nil
 	}
-
 	go dhtnode.Run()
-
 	return dhtnode
 }
 
