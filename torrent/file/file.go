@@ -50,10 +50,11 @@ type FileDict struct {
 	Md5sum string
 }
 
-func NewFileStore(info *InfoDict, fileSystem FileSystem) (f FileStore, totalSize int64, err error) {
-	fs := &fileStore{}
-	fs.fileSystem = fileSystem
-	fs.pieceSize = info.PieceLength
+func NewFileStore(info *InfoDict, fileSystem FileSystem) (FileStore, int64, error) {
+	fs := &fileStore{
+		fileSystem: fileSystem,
+		pieceSize:  info.PieceLength,
+	}
 	numFiles := len(info.Files)
 	if numFiles == 0 {
 		// Create dummy Files structure.
@@ -62,24 +63,23 @@ func NewFileStore(info *InfoDict, fileSystem FileSystem) (f FileStore, totalSize
 	}
 	fs.files = make([]fileEntry, numFiles)
 	fs.offsets = make([]int64, numFiles)
-	for i, _ := range info.Files {
+	totalSize := int64(0)
+	for i := range info.Files {
 		src := &info.Files[i]
-		var file File
-		file, err = fs.fileSystem.Open(src.Path, src.Length)
+		file, err := fs.fileSystem.Open(src.Path, src.Length)
 		if err != nil {
 			// Close all files opened up to now.
-			for i2 := 0; i2 < i; i2++ {
-				fs.files[i2].file.Close()
+			for j := 0; j < i; j++ {
+				fs.files[j].file.Close()
 			}
-			return
+			return fs, 0, err
 		}
 		fs.files[i].file = file
 		fs.files[i].length = src.Length
 		fs.offsets[i] = totalSize
 		totalSize += src.Length
 	}
-	f = fs
-	return
+	return fs, totalSize, nil
 }
 
 func (f *fileStore) find(offset int64) int {
@@ -123,7 +123,7 @@ func (f *fileStore) ReadAt(p []byte, off int64) (n int, err error) {
 	}
 	// At this point if there's anything left to read it means we've run off the
 	// end of the file store. Read zeros. This is defined by the bittorrent protocol.
-	for i, _ := range p {
+	for i := range p {
 		p[i] = 0
 	}
 	return
@@ -155,14 +155,14 @@ func (f *fileStore) WritePiece(p []byte, piece int) (n int, err error) {
 	// At this point if there's anything left to write it means we've run off the
 	// end of the file store. Check that the data is zeros.
 	// This is defined by the bittorrent protocol.
-	for i, _ := range p {
+	for i := range p {
 		if p[i] != 0 {
-			err = errors.New("Unexpected non-zero data at end of store.")
+			err = errors.New("unexpected non-zero data at end of store")
 			n = n + i
 			return
 		}
 	}
-	n = n + len(p)
+	n += len(p)
 	return
 }
 
@@ -170,7 +170,6 @@ func (f *fileStore) Close() (err error) {
 	for i := range f.files {
 		f.files[i].file.Close()
 	}
-
 	if f.fileSystem != nil {
 		err = f.fileSystem.Close()
 	}

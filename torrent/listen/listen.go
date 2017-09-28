@@ -63,6 +63,7 @@ func ListenForPeerConnections(flags *conf.Flags) (conChan chan *BtConn, listenPo
 				continue
 			}
 			header, err := ReadHeader(conn)
+			log.Println(string(header))
 			if err != nil {
 				log.Println("Error reading header: ", err)
 				continue

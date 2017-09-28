@@ -517,9 +517,16 @@ func (ts *TorrentSession) DoTorrent() {
 	}
 
 	defer ts.Shutdown()
-
+	go func() {
+		for {
+			for _, p := range ts.peers {
+				str := "PEER FILE UPDATE TEST"
+				p.SendMessage([]byte(str))
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
 	lastDownloaded := ts.Session.Downloaded
-
 	for {
 		if !ts.execOnSeedingDone && ts.goodPieces == ts.totalPieces {
 			ts.execOnSeeding()
@@ -681,6 +688,11 @@ func (ts *TorrentSession) chokePeers() (err error) {
 		}
 	}
 	return
+}
+
+func MessagePeer(peer *peer.PeerState) {
+	str := "PEER FILE UPDATE PING"
+	peer.SendMessage([]byte(str))
 }
 
 func (ts *TorrentSession) RequestBlock(p *peer.PeerState) error {

@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/rasaford/bitsync/torrent/file"
+
 	"github.com/nictuku/dht"
 	"github.com/rasaford/bitsync/torrent/conf"
 	"github.com/rasaford/bitsync/torrent/ldp"
@@ -14,14 +16,16 @@ import (
 
 func Start(path string, options ...func(*conf.Flags)) {
 	flags := &conf.Flags{
-		Port:                12345,
+		Port:                0,
 		UseDeadlockDetector: false,
 		UseLPD:              true,
-		UseUPnP:             false,
-		UseNATPMP:           true,
+		UseUPnP:             true,
+		UseNATPMP:           false,
+		FileSystemProvider:  file.OsFsProvider{},
 		TrackerlessMode:     true,
 		Dial:                nil,
 		QuickResume:         true,
+		MaxActive:           10,
 	}
 	for _, option := range options {
 		option(flags)
@@ -34,7 +38,6 @@ func startTorrent(flags *conf.Flags, torrentFiles []string) error {
 	if err != nil {
 		log.Println("could not listen for peer connection ", err)
 	}
-	quit := listenInterrupt()
 	create := make(chan string, flags.MaxActive)
 	start := make(chan *TorrentSession, 1)
 	done := make(chan *TorrentSession, 1)
@@ -48,7 +51,7 @@ func startTorrent(flags *conf.Flags, torrentFiles []string) error {
 		for torrentFile := range create {
 			ts, err := NewTorrentSession(flags, torrentFile, uint16(port))
 			if err != nil {
-				log.Println("Couldn't create torrent session for "+torrentFile+" .", err)
+				log.Printf("Couldn't create torrent session for %s err: %v\n", torrentFile, err)
 				done <- &TorrentSession{}
 			} else {
 				log.Printf("Created torrent session for %s", ts.M.Info.Name)
@@ -77,6 +80,7 @@ func startTorrent(flags *conf.Flags, torrentFiles []string) error {
 		}
 	}
 
+	quit := listenInterrupt()
 	theWorldisEnding := false
 main:
 	for {
@@ -115,6 +119,7 @@ main:
 			for _, ts := range torrentSessions {
 				go ts.Quit()
 			}
+			os.Exit(1)
 		case c := <-conn:
 			//	log.Printf("New bt connection for ih %x", c.Infohash)
 			if ts, ok := torrentSessions[c.Infohash]; ok {

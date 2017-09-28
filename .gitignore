@@ -12,3 +12,6 @@
 
 # Project-local glide cache, RE: https://github.com/Masterminds/glide/issues/736
 .glide/
+
+# if some of the .bitsync files end up in a local repo ignore them
+*.bitsync

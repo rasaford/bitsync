@@ -1,24 +1,30 @@
-package file
+package commit
 
 import (
 	"io"
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 
-	"github.com/jackpal/Taipei-Torrent/torrent"
-	"github.com/rasaford/bitsync/defaults"
+	"github.com/rasaford/bitsync/torrent/meta"
 )
+
+const torrentFileName = "files.bitsync"
 
 // Create creates a torrent file indexing all the files in the given directory.
 func Create(dir string) (string, error) {
-	path := path.Join(dir, defaults.TorrentFileName)
+	path := filepath.Join(dir, torrentFileName)
+	path, _ = filepath.Abs(path)
 	f, err := createFile(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	writeTorrent(dir, f)
+	err = writeTorrent(dir, f)
+	if err != nil {
+		return "", err
+	}
 	log.Printf("torrent file created at %s\n", path)
 	return path, nil
 }
@@ -35,13 +41,15 @@ func createFile(fileDir string) (*os.File, error) {
 	return f, nil
 }
 
-func writeTorrent(dir string, w io.Writer) {
-	m, err := torrent.CreateMetaInfoFromFileSystem(nil, dir, ":8000", 0, true)
+func writeTorrent(dir string, w io.Writer) error {
+	m, err := meta.Index(nil, dir, ":8000", 0, true)
 	if err != nil {
-		log.Fatal("cannot create metadata", err)
+		return err
 	}
+	// write the data to the writer
 	m.Bencode(w)
 	if err != nil {
-		log.Fatal("cannot encode the metadata", err)
+		return err
 	}
+	return nil
 }
