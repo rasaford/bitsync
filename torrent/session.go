@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rasaford/bitsync/defaults"
+
 	bencode "github.com/jackpal/bencode-go"
 	"github.com/nictuku/dht"
 	"github.com/nictuku/nettools"
@@ -140,15 +142,14 @@ func (ts *TorrentSession) reload(metadata string) (err error) {
 	return
 }
 
-func (ts *TorrentSession) load() (err error) {
+func (ts *TorrentSession) load() error {
 	log.Printf("[ %s ] Tracker: %v, Comment: %v, InfoHash: %x, Encoding: %v, Private: %v",
 		ts.M.Info.Name, ts.M.AnnounceList, ts.M.Comment, ts.M.InfoHash, ts.M.Encoding, ts.M.Info.Private)
 	if e := ts.M.Encoding; e != "" && e != "UTF-8" {
-		err = fmt.Errorf("Unknown encoding %v", e)
-		return
+		err := fmt.Errorf("Unknown encoding %v", e)
+		return err
 	}
 
-	ext := ".torrent"
 	dir := ts.flags.FileDir
 	if len(ts.M.Info.Files) != 0 {
 		torrentName := ts.M.Info.Name
@@ -159,25 +160,25 @@ func (ts *TorrentSession) load() (err error) {
 		torrentName = path.Clean("/" + torrentName)
 		dir += torrentName
 		//Remove ".torrent" extension if present
-		if strings.HasSuffix(strings.ToLower(dir), ext) {
-			dir = dir[:len(dir)-len(ext)]
+		ex := defaults.Extension
+		if strings.HasSuffix(strings.ToLower(dir), ex) {
+			dir = dir[:len(dir)-len(ex)]
 		}
 	}
 
-	var fileSystem file.FileSystem
-	fileSystem, err = ts.flags.FileSystemProvider.NewFS(dir)
+	fileSystem, err := ts.flags.FileSystemProvider.NewFS(dir)
 	if err != nil {
-		return
+		return err
 	}
 
 	ts.fileStore, ts.totalSize, err = file.NewFileStore(&ts.M.Info, fileSystem)
 	if err != nil {
-		return
+		return err
 	}
 
 	if ts.M.Info.PieceLength == 0 {
 		err = fmt.Errorf("Bad PieceLength: %v", ts.M.Info.PieceLength)
-		return
+		return err
 	}
 
 	ts.totalPieces = int(ts.totalSize / ts.M.Info.PieceLength)
@@ -207,7 +208,7 @@ func (ts *TorrentSession) load() (err error) {
 		end := time.Now()
 		log.Printf("[ %s ] Computed missing pieces (%.2f seconds)\n", ts.M.Info.Name, end.Sub(start).Seconds())
 		if err != nil {
-			return
+			return err
 		}
 	} else if ts.flags.QuickResume {
 		resumeFilePath := "./" + hex.EncodeToString([]byte(ts.M.InfoHash)) + "-haveBitset"
@@ -255,7 +256,7 @@ func (ts *TorrentSession) load() (err error) {
 		}
 	}
 	ts.Session.HaveTorrent = true
-	return
+	return nil
 }
 
 func (ts *TorrentSession) pieceLength(piece int) int {

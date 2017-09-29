@@ -7,10 +7,12 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/rasaford/bitsync/defaults"
+
 	"github.com/rasaford/bitsync/torrent/meta"
 )
 
-const torrentFileName = "files.bitsync"
+const torrentFileName = "files" + defaults.Extension
 
 // Create creates a torrent file indexing all the files in the given directory.
 func Create(dir string) (string, error) {

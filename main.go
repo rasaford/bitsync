@@ -14,7 +14,7 @@ var (
 )
 
 func main() {
-	flag.Parse()
+	initialize()
 	if *file == "" {
 		dir, err := commit.Create(".")
 		if err != nil {
@@ -23,4 +23,9 @@ func main() {
 		file = &dir
 	}
 	torrent.Start(*file)
+}
+
+func initialize() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	flag.Parse()
 }

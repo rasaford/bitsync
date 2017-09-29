@@ -13,14 +13,9 @@ type File interface {
 	io.Closer
 }
 
-//Interface for a provider of filesystems.
-type FsProvider interface {
-	NewFS(directory string) (FileSystem, error)
-}
-
 // Interface for a file system. A file system contains files.
 type FileSystem interface {
-	Open(name []string, length int64) (file File, err error)
+	Open(*FileDict) (file File, err error)
 	io.Closer
 }
 
@@ -44,12 +39,22 @@ type fileEntry struct {
 	file   File
 }
 
+const (
+	statusUnknown  = 0
+	statusHave     = 1
+	statusModified = 2
+	statusNeed     = 3
+)
+
 type FileDict struct {
 	Length int64
 	Path   []string
-	Md5sum string
+	MD5Sum string
+	// status weather of not the fiele already exists on the fs or not.
+	status int
 }
 
+// NewFileStore creates a storage interface to be able to write files to disk
 func NewFileStore(info *InfoDict, fileSystem FileSystem) (FileStore, int64, error) {
 	fs := &fileStore{
 		fileSystem: fileSystem,
@@ -58,21 +63,27 @@ func NewFileStore(info *InfoDict, fileSystem FileSystem) (FileStore, int64, erro
 	numFiles := len(info.Files)
 	if numFiles == 0 {
 		// Create dummy Files structure.
-		info = &InfoDict{Files: []FileDict{FileDict{info.Length, []string{info.Name}, info.Md5sum}}}
+		info = &InfoDict{
+			Files: []FileDict{FileDict{
+				Length: info.Length,
+				Path:   []string{info.Name},
+				MD5Sum: info.Md5sum,
+			}},
+		}
 		numFiles = 1
 	}
 	fs.files = make([]fileEntry, numFiles)
 	fs.offsets = make([]int64, numFiles)
-	totalSize := int64(0)
-	for i := range info.Files {
-		src := &info.Files[i]
-		file, err := fs.fileSystem.Open(src.Path, src.Length)
+	// Compare between what's in the InfoDict and on the fileSystem
+	var totalSize int64
+	for i, src := range info.Files {
+		file, err := fs.fileSystem.Open(&src)
 		if err != nil {
 			// Close all files opened up to now.
 			for j := 0; j < i; j++ {
 				fs.files[j].file.Close()
 			}
-			return fs, 0, err
+			return nil, 0, err
 		}
 		fs.files[i].file = file
 		fs.files[i].length = src.Length
@@ -158,7 +169,7 @@ func (f *fileStore) WritePiece(p []byte, piece int) (n int, err error) {
 	for i := range p {
 		if p[i] != 0 {
 			err = errors.New("unexpected non-zero data at end of store")
-			n = n + i
+			n += i
 			return
 		}
 	}

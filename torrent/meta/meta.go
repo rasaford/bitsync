@@ -180,23 +180,21 @@ type FileStoreFileAdapter struct {
 	f MetaInfoFile
 }
 
-func (f *FileStoreFileSystemAdapter) Open(name []string, length int64) (file file.File, err error) {
-	var ff MetaInfoFile
-	ff, err = f.m.Open(path.Join(name...))
+func (f *FileStoreFileSystemAdapter) Open(file *file.FileDict) (file.File, error) {
+	ff, err := f.m.Open(path.Join(file.Path...))
 	if err != nil {
-		return
+		return nil, err
 	}
 	stat, err := ff.Stat()
 	if err != nil {
-		return
+		return nil, err
 	}
 	actualSize := stat.Size()
-	if actualSize != length {
-		err = fmt.Errorf("Unexpected file size %v. Expected %v", actualSize, length)
-		return
+	if actualSize != file.Length {
+		err := fmt.Errorf("Unexpected file size %v. Expected %v", actualSize, file.Length)
+		return nil, err
 	}
-	file = &FileStoreFileAdapter{ff}
-	return
+	return &FileStoreFileAdapter{ff}, nil
 }
 
 func (f *FileStoreFileSystemAdapter) Close() error {
@@ -215,7 +213,7 @@ func (f *FileStoreFileAdapter) WriteAt(p []byte, off int64) (n int, err error) {
 		return
 	}
 	if bytes.Compare(p, q) != 0 {
-		err = fmt.Errorf("New data does not match original data.")
+		err = fmt.Errorf("new data does not match original data")
 	}
 	return
 }
@@ -233,67 +231,56 @@ func Index(fileSystem MetaInfoFileSystem, root, tracker string, pieceLength int6
 		fileSystem = &OSMetaInfoFileSystem{dir}
 		root = file
 	}
-	m := &MetaInfo{}
+	info := &MetaInfo{}
+	exclusion := DefaultExPattern()
 	fileInfo, err := fileSystem.Stat(root)
 	if err != nil {
 		return nil, err
 	}
 	var totalLength int64
 	if fileInfo.IsDir() {
-		err = m.addFiles(fileSystem, root)
-		if err != nil {
+		if err := info.addFiles(fileSystem, root, exclusion); err != nil {
 			return nil, err
 		}
-		for i := range m.Info.Files {
-			totalLength += m.Info.Files[i].Length
-		}
-		if wantMD5Sum {
-			for i := range m.Info.Files {
-				fd := &m.Info.Files[i]
-				fd.Md5sum, err = md5Sum(fileSystem, path.Join(fd.Path...))
-				if err != nil {
-					return nil, err
-				}
+		for i := range info.Info.Files { // calc total length & generate md5 sum
+			fd := &info.Info.Files[i]
+			totalLength += fd.Length
+			if fd.MD5Sum, err = md5Sum(fileSystem, path.Join(fd.Path...)); err != nil {
+				return nil, err
 			}
 		}
 	} else {
-		m.Info.Name = path.Base(root)
+		info.Info.Name = path.Base(root)
 		totalLength = fileInfo.Size()
-		m.Info.Length = totalLength
-		if wantMD5Sum {
-			m.Info.Md5sum, err = md5Sum(fileSystem, root)
-			if err != nil {
-				return nil, err
-			}
+		info.Info.Length = totalLength
+		if info.Info.Md5sum, err = md5Sum(fileSystem, root); err != nil {
+			return nil, err
 		}
 	}
 
 	if pieceLength == 0 {
 		pieceLength = choosePieceLength(totalLength)
 	}
-	m.Info.PieceLength = int64(pieceLength)
+	info.Info.PieceLength = int64(pieceLength)
 	fileStoreFS := &FileStoreFileSystemAdapter{fileSystem}
-	var fileStore file.FileStore
-	var fileStoreLength int64
-	fileStore, fileStoreLength, err = file.NewFileStore(&m.Info, fileStoreFS)
+	fileStore, fsLength, err := file.NewFileStore(&info.Info, fileStoreFS)
 	if err != nil {
 		return nil, err
 	}
-	if fileStoreLength != totalLength {
-		err = fmt.Errorf("Filestore total length %v, expected %v", fileStoreLength, totalLength)
+	if fsLength != totalLength {
+		err = fmt.Errorf("Filestore total length %v, expected %v", fsLength, totalLength)
 		return nil, err
 	}
-	var sums []byte
-	sums, err = computeSums(fileStore, totalLength, int64(pieceLength))
+	sums, err := computeSums(fileStore, totalLength, int64(pieceLength))
 	if err != nil {
 		return nil, err
 	}
-	m.Info.Pieces = string(sums)
+	info.Info.Pieces = string(sums)
 	// m.UpdateInfoHash(nil)
 	if tracker != "" {
-		m.Announce = "http://" + tracker + "/announce"
+		info.Announce = "http://" + tracker + "/announce"
 	}
-	return m, err
+	return info, err
 }
 
 const MinimumPieceLength = 16 * 1024
@@ -304,17 +291,17 @@ const TargetPieceCountMin = 1 << TargetPieceCountLog2
 const TargetPieceCountMax = TargetPieceCountMin << 1
 
 // Choose a good piecelength.
-func choosePieceLength(totalLength int64) (pieceLength int64) {
+func choosePieceLength(totalLength int64) int64 {
 	// Must be a power of 2.
 	// Must be a multiple of 16KB
 	// Prefer to provide around 1024..2048 pieces.
-	pieceLength = MinimumPieceLength
+	var pieceLength int64 = MinimumPieceLength
 	pieces := totalLength / pieceLength
 	for pieces >= TargetPieceCountMax {
 		pieceLength <<= 1
 		pieces >>= 1
 	}
-	return
+	return pieceLength
 }
 
 func roundUpToPowerOfTwo(v uint64) uint64 {
@@ -343,24 +330,21 @@ func WriteMetaInfoBytes(root, tracker string, w io.Writer) (err error) {
 	return
 }
 
-func md5Sum(fs MetaInfoFileSystem, file string) (sum string, err error) {
-	var f MetaInfoFile
-	f, err = fs.Open(file)
+func md5Sum(fs MetaInfoFileSystem, file string) (string, error) {
+	fd, err := fs.Open(file)
 	if err != nil {
-		return
+		return "", err
 	}
-	defer f.Close()
+	defer fd.Close()
 	hash := md5.New()
-	_, err = io.Copy(hash, f)
+	_, err = io.Copy(hash, fd)
 	if err != nil {
-		return
+		return "", err
 	}
-	sum = string(hash.Sum(nil))
-	return
+	return string(hash.Sum(nil)), nil
 }
 
-func (m *MetaInfo) addFiles(fileSystem MetaInfoFileSystem, fileStr string) error {
-	exclusion := DefaultExPattern()
+func (m *MetaInfo) addFiles(fileSystem MetaInfoFileSystem, fileStr string, exclusion *ExclusionPattern) error {
 	fileInfo, err := fileSystem.Stat(fileStr)
 	if err != nil {
 		return err
@@ -375,15 +359,13 @@ func (m *MetaInfo) addFiles(fileSystem MetaInfoFileSystem, fileStr string) error
 			return err
 		}
 		for _, file := range files {
-			if err := m.addFiles(fileSystem, path.Join(fileStr, file)); err != nil {
+			if err := m.addFiles(fileSystem, path.Join(fileStr, file), exclusion); err != nil {
 				return err
 			}
 		}
-	} else if !exclusion.Matches(fileStr) {
+	} else if !exclusion.Matches(fileStr) { // only add the file if it does not match any of the exclusion patterns
 		fileDict := file.FileDict{Length: fileInfo.Size()}
-		cleanFile := path.Clean(fileStr)
-		parts := strings.Split(cleanFile, string(os.PathSeparator))
-		fileDict.Path = parts
+		fileDict.Path = strings.Split(path.Clean(fileStr), string(os.PathSeparator))
 		m.Info.Files = append(m.Info.Files, fileDict)
 	}
 	return nil

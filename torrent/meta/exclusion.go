@@ -28,12 +28,14 @@ func (e *ExclusionPattern) Matches(path string) bool {
 			continue
 		}
 		if res {
+			log.Printf("excluded: %s\n", path)
 			return true
 		}
 	}
 	return false
 }
 
+// Add adds a regex pattern to the list op patterns to match against
 func (e *ExclusionPattern) Add(pattern ...string) {
 	for _, p := range pattern {
 		e.patterns = append(e.patterns, p)

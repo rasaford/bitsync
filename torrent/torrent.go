@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"github.com/rasaford/bitsync/torrent/file"
 
@@ -15,6 +16,11 @@ import (
 )
 
 func Start(path string, options ...func(*conf.Flags)) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		log.Printf("cannot get absolute path %v\n", err)
+		return
+	}
 	flags := &conf.Flags{
 		Port:                0,
 		UseDeadlockDetector: false,
@@ -24,6 +30,7 @@ func Start(path string, options ...func(*conf.Flags)) {
 		FileSystemProvider:  file.OsFsProvider{},
 		TrackerlessMode:     true,
 		Dial:                nil,
+		FileDir:             path,
 		QuickResume:         true,
 		MaxActive:           10,
 	}

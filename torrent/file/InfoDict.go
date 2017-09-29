@@ -45,8 +45,8 @@ func (i *InfoDict) ToMap() (m map[string]interface{}) {
 			if len(f.Path) > 0 {
 				fd["path"] = f.Path
 			}
-			if f.Md5sum != "" {
-				fd["md5sum"] = f.Md5sum
+			if f.MD5Sum != "" {
+				fd["md5sum"] = f.MD5Sum
 			}
 			if len(fd) > 0 {
 				fi = append(fi, fd)

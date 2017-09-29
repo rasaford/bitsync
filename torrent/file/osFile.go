@@ -1,11 +1,19 @@
 package file
 
 import (
-	"errors"
+	"crypto/md5"
+	"fmt"
+	"io"
+	"log"
 	"os"
 	"path"
 	"strings"
 )
+
+//Interface for a provider of filesystems.
+type FsProvider interface {
+	NewFS(directory string) (FileSystem, error)
+}
 
 // a torrent FileSystem that is backed by real OS files
 type osFileSystem struct {
@@ -23,19 +31,20 @@ func (o OsFsProvider) NewFS(directory string) (fs FileSystem, err error) {
 	return &osFileSystem{directory}, nil
 }
 
-func (o *osFileSystem) Open(name []string, length int64) (file File, err error) {
+func (o *osFileSystem) Open(file *FileDict) (File, error) {
 	// Clean the source path before appending to the storePath. This
 	// ensures that source paths that start with ".." can't escape.
-	cleanSrcPath := path.Clean("/" + path.Join(name...))[1:]
+	cleanSrcPath := path.Clean("/" + path.Join(file.Path...))[1:]
 	fullPath := path.Join(o.storePath, cleanSrcPath)
-	err = ensureDirectory(fullPath)
-	if err != nil {
-		return
-	}
+	// err := ensureDirectory(fullPath)
+	// if err != nil {
+	// 	return nil, err
+	// }
 	osfile := &osFile{fullPath}
-	file = osfile
-	err = osfile.ensureExists(length)
-	return
+	if err := osfile.ensureExists(file.Length, file.MD5Sum); err != nil {
+		return nil, err
+	}
+	return osfile, nil
 }
 
 func (o *osFileSystem) Close() error {
@@ -46,44 +55,54 @@ func (o *osFile) Close() (err error) {
 	return
 }
 
-func ensureDirectory(fullPath string) (err error) {
+func ensureDirectory(fullPath string) error {
 	fullPath = path.Clean(fullPath)
 	if !strings.HasPrefix(fullPath, "/") {
 		// Transform into absolute path.
-		var cwd string
-		if cwd, err = os.Getwd(); err != nil {
-			return
+		cwd, err := os.Getwd()
+		if err != nil {
+			log.Fatal("cannot get path to directory", err)
 		}
-		fullPath = cwd + "/" + fullPath
+		fullPath = fmt.Sprintf("%s/%s", cwd, fullPath)
 	}
 	base, _ := path.Split(fullPath)
 	if base == "" {
-		panic("Programming error: could not find base directory for absolute path " + fullPath)
+		log.Fatalf("could not find base directory for absolute path %s\n", fullPath)
 	}
-	err = os.MkdirAll(base, 0755)
-	return
+	return os.MkdirAll(base, 0755)
 }
 
-func (o *osFile) ensureExists(length int64) (err error) {
+func (o *osFile) ensureExists(length int64, md5Hash string) error {
 	name := o.filePath
 	st, err := os.Stat(name)
 	if err != nil && os.IsNotExist(err) {
 		f, err := os.Create(name)
-		defer f.Close()
 		if err != nil {
 			return err
 		}
+		defer f.Close()
 	} else {
-		if st.Size() == length {
-			return
+		fd, err := os.Open(name)
+		if err != nil {
+			log.Println(err)
+			return nil
+		}
+		defer fd.Close()
+		hash := md5.New()
+		_, err = io.Copy(hash, fd)
+		if err != nil {
+			return err
+		}
+		readMD5 := string(hash.Sum(nil))
+		if st.Size() != length && readMD5 != md5Hash {
+			return fmt.Errorf("the file %s exists but is not equal to the indexed one", name)
 		}
 	}
 	err = os.Truncate(name, length)
 	if err != nil {
-		err = errors.New("Could not truncate file.")
-		return
+		return fmt.Errorf("could not truncate file")
 	}
-	return
+	return nil
 }
 
 func (o *osFile) ReadAt(p []byte, off int64) (n int, err error) {

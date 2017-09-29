@@ -15,3 +15,8 @@
 
 # if some of the .bitsync files end up in a local repo ignore them
 *.bitsync
+
+*debug
+
+# vscode prefs
+.vscode
