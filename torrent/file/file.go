@@ -47,11 +47,11 @@ const (
 )
 
 type FileDict struct {
+	// Length of the file in bytes
 	Length int64
 	Path   []string
+	// base64 encoded md5sum of the file
 	MD5Sum string
-	// status weather of not the fiele already exists on the fs or not.
-	status int
 }
 
 // NewFileStore creates a storage interface to be able to write files to disk
@@ -64,11 +64,7 @@ func NewFileStore(info *InfoDict, fileSystem FileSystem) (FileStore, int64, erro
 	if numFiles == 0 {
 		// Create dummy Files structure.
 		info = &InfoDict{
-			Files: []FileDict{FileDict{
-				Length: info.Length,
-				Path:   []string{info.Name},
-				MD5Sum: info.Md5sum,
-			}},
+			Files: make([]FileDict, 0, 8),
 		}
 		numFiles = 1
 	}

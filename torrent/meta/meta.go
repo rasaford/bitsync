@@ -2,23 +2,24 @@ package meta
 
 import (
 	"bytes"
-	"crypto/md5"
 	"crypto/sha1"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/net/proxy"
 
 	bencode "github.com/jackpal/bencode-go"
 	"github.com/nictuku/dht"
+	"github.com/pkg/errors"
 	"github.com/rasaford/bitsync/torrent/file"
+	"github.com/rasaford/bitsync/torrent/hash"
 	tproxy "github.com/rasaford/bitsync/torrent/proxy"
 	"github.com/rasaford/bitsync/torrent/uri"
 )
@@ -106,19 +107,19 @@ func GetMetaInfo(dialer proxy.Dialer, torrent string) (metaInfo *MetaInfo, err e
 	m, err = bencode.Decode(input)
 	input.Close()
 	if err != nil {
-		err = errors.New("Couldn't parse torrent file phase 1: " + err.Error())
+		err = errors.Wrap(err, "Couldn't parse torrent file phase 1")
 		return
 	}
 
 	topMap, ok := m.(map[string]interface{})
 	if !ok {
-		err = errors.New("couldn't parse torrent file phase 2")
+		err = fmt.Errorf("couldn't parse torrent file phase 2")
 		return
 	}
 
 	infoMap, ok := topMap["info"]
 	if !ok {
-		err = errors.New("Couldn't parse torrent file. info")
+		err = fmt.Errorf("Couldn't parse torrent file. info")
 		return
 	}
 	var b bytes.Buffer
@@ -225,44 +226,27 @@ func (f *FileStoreFileAdapter) Close() (err error) {
 // Create a MetaInfo for a given file and file system.
 // If fs is nil then the OSMetaInfoFileSystem will be used.
 // If pieceLength is 0 then an optimal piece length will be chosen.
-func Index(fileSystem MetaInfoFileSystem, root, tracker string, pieceLength int64, wantMD5Sum bool) (*MetaInfo, error) {
-	if fileSystem == nil {
-		dir, file := path.Split(root)
-		fileSystem = &OSMetaInfoFileSystem{dir}
-		root = file
+func Index(fs MetaInfoFileSystem, dir, tracker string, pieceSize int64) (*MetaInfo, error) {
+	if fs == nil {
+		r, f := filepath.Split(dir)
+		fs = &OSMetaInfoFileSystem{r}
+		dir = f
 	}
 	info := &MetaInfo{}
 	exclusion := DefaultExPattern()
-	fileInfo, err := fileSystem.Stat(root)
-	if err != nil {
+	var totalLength int64
+	if err := info.addFiles(fs, dir, exclusion); err != nil {
 		return nil, err
 	}
-	var totalLength int64
-	if fileInfo.IsDir() {
-		if err := info.addFiles(fileSystem, root, exclusion); err != nil {
-			return nil, err
-		}
-		for i := range info.Info.Files { // calc total length & generate md5 sum
-			fd := &info.Info.Files[i]
-			totalLength += fd.Length
-			if fd.MD5Sum, err = md5Sum(fileSystem, path.Join(fd.Path...)); err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		info.Info.Name = path.Base(root)
-		totalLength = fileInfo.Size()
-		info.Info.Length = totalLength
-		if info.Info.Md5sum, err = md5Sum(fileSystem, root); err != nil {
-			return nil, err
-		}
+	for _, fd := range info.Info.Files { // calc total length of all added files
+		totalLength += fd.Length
 	}
 
-	if pieceLength == 0 {
-		pieceLength = choosePieceLength(totalLength)
+	if pieceSize == 0 {
+		pieceSize = choosePieceLength(totalLength)
 	}
-	info.Info.PieceLength = int64(pieceLength)
-	fileStoreFS := &FileStoreFileSystemAdapter{fileSystem}
+	info.Info.PieceLength = pieceSize
+	fileStoreFS := &FileStoreFileSystemAdapter{fs}
 	fileStore, fsLength, err := file.NewFileStore(&info.Info, fileStoreFS)
 	if err != nil {
 		return nil, err
@@ -271,14 +255,14 @@ func Index(fileSystem MetaInfoFileSystem, root, tracker string, pieceLength int6
 		err = fmt.Errorf("Filestore total length %v, expected %v", fsLength, totalLength)
 		return nil, err
 	}
-	sums, err := computeSums(fileStore, totalLength, int64(pieceLength))
+	sums, err := computeSums(fileStore, totalLength, pieceSize)
 	if err != nil {
 		return nil, err
 	}
 	info.Info.Pieces = string(sums)
 	// m.UpdateInfoHash(nil)
 	if tracker != "" {
-		info.Announce = "http://" + tracker + "/announce"
+		info.Announce = fmt.Sprintf("http://%s/announce", tracker)
 	}
 	return info, err
 }
@@ -318,7 +302,7 @@ func roundUpToPowerOfTwo(v uint64) uint64 {
 
 func WriteMetaInfoBytes(root, tracker string, w io.Writer) (err error) {
 	var m *MetaInfo
-	m, err = Index(nil, root, tracker, 0, true)
+	m, err = Index(nil, root, tracker, 0)
 	if err != nil {
 		return
 	}
@@ -330,27 +314,14 @@ func WriteMetaInfoBytes(root, tracker string, w io.Writer) (err error) {
 	return
 }
 
-func md5Sum(fs MetaInfoFileSystem, file string) (string, error) {
-	fd, err := fs.Open(file)
-	if err != nil {
-		return "", err
-	}
-	defer fd.Close()
-	hash := md5.New()
-	_, err = io.Copy(hash, fd)
-	if err != nil {
-		return "", err
-	}
-	return string(hash.Sum(nil)), nil
-}
-
-func (m *MetaInfo) addFiles(fileSystem MetaInfoFileSystem, fileStr string, exclusion *ExclusionPattern) error {
-	fileInfo, err := fileSystem.Stat(fileStr)
+// addFiles adds all the files below if it does not mathe any of the exclusion patterns.
+func (m *MetaInfo) addFiles(fileSystem MetaInfoFileSystem, dir string, exclusion *ExclusionPattern) error {
+	fileInfo, err := fileSystem.Stat(dir)
 	if err != nil {
 		return err
 	}
 	if fileInfo.IsDir() { // if is dir recurse
-		f, err := fileSystem.Open(fileStr)
+		f, err := fileSystem.Open(dir)
 		if err != nil {
 			return err
 		}
@@ -359,13 +330,22 @@ func (m *MetaInfo) addFiles(fileSystem MetaInfoFileSystem, fileStr string, exclu
 			return err
 		}
 		for _, file := range files {
-			if err := m.addFiles(fileSystem, path.Join(fileStr, file), exclusion); err != nil {
+			// recursively add all files withing the search dir
+			if err := m.addFiles(fileSystem, filepath.Join(dir, file), exclusion); err != nil {
 				return err
 			}
 		}
-	} else if !exclusion.Matches(fileStr) { // only add the file if it does not match any of the exclusion patterns
-		fileDict := file.FileDict{Length: fileInfo.Size()}
-		fileDict.Path = strings.Split(path.Clean(fileStr), string(os.PathSeparator))
+	} else if !exclusion.Matches(dir) { // only add the file if it does not match any of the exclusion patterns
+		fd, err := fileSystem.Open(dir)
+		if err != nil {
+			return errors.Wrap(err, "open failed")
+		}
+		md5 := hash.FileHash(fd)
+		fileDict := file.FileDict{
+			Length: fileInfo.Size(),
+			Path:   strings.Split(filepath.Clean(dir), string(os.PathSeparator)),
+			MD5Sum: md5,
+		}
 		m.Info.Files = append(m.Info.Files, fileDict)
 	}
 	return nil
@@ -461,7 +441,7 @@ func TrackerInfo(dialer proxy.Dialer, url string) (tr *TrackerResponse, err erro
 		data, _ := ioutil.ReadAll(r.Body)
 		reason := "Bad Request " + string(data)
 		log.Println(reason)
-		err = errors.New(reason)
+		err = fmt.Errorf(reason)
 		return
 	}
 	var tr2 TrackerResponse

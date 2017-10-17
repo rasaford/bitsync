@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/rasaford/bitsync/defaults"
-
 	"github.com/rasaford/bitsync/torrent/meta"
 )
 
@@ -16,14 +15,14 @@ const torrentFileName = "files" + defaults.Extension
 
 // Create creates a torrent file indexing all the files in the given directory.
 func Create(dir string) (string, error) {
+	dir, _ = filepath.Abs(dir)
 	path := filepath.Join(dir, torrentFileName)
-	path, _ = filepath.Abs(path)
 	f, err := createFile(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	err = writeTorrent(dir, f)
+	err = createTorrent(dir, f)
 	if err != nil {
 		return "", err
 	}
@@ -43,8 +42,8 @@ func createFile(fileDir string) (*os.File, error) {
 	return f, nil
 }
 
-func writeTorrent(dir string, w io.Writer) error {
-	m, err := meta.Index(nil, dir, ":8000", 0, true)
+func createTorrent(dir string, w io.Writer) error {
+	m, err := meta.Index(nil, dir, ":8000", 0)
 	if err != nil {
 		return err
 	}

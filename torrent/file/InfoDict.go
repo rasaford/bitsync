@@ -5,11 +5,7 @@ type InfoDict struct {
 	Pieces      string
 	Private     int64
 	Name        string
-	// Single File Mode
-	Length int64
-	Md5sum string
-	// Multiple File mode
-	Files []FileDict
+	Files       []FileDict
 }
 
 // Copy the non-default values from an InfoDict to a map.
@@ -27,12 +23,6 @@ func (i *InfoDict) ToMap() (m map[string]interface{}) {
 	}
 	if i.Name != "" {
 		id["name"] = i.Name
-	}
-	if i.Length != 0 {
-		id["length"] = i.Length
-	}
-	if i.Md5sum != "" {
-		id["md5sum"] = i.Md5sum
 	}
 	if len(i.Files) > 0 {
 		var fi []map[string]interface{}

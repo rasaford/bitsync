@@ -126,6 +126,8 @@ main:
 			for _, ts := range torrentSessions {
 				go ts.Quit()
 			}
+			log.Print("\nReceived SIGKILL; stopping all torrents\n")
+			// TODO: implement graceful shutdown
 			os.Exit(1)
 		case c := <-conn:
 			//	log.Printf("New bt connection for ih %x", c.Infohash)

@@ -211,7 +211,7 @@ func (ts *TorrentSession) load() error {
 			return err
 		}
 	} else if ts.flags.QuickResume {
-		resumeFilePath := "./" + hex.EncodeToString([]byte(ts.M.InfoHash)) + "-haveBitset"
+		resumeFilePath := fmt.Sprintf("./%s-haveBitset", hex.EncodeToString([]byte(ts.M.InfoHash)))
 		if resumeFile, err := os.Open(resumeFilePath); err == nil {
 			rfstat, _ := resumeFile.Stat()
 			tBA := make([]byte, 2*rfstat.Size())
@@ -232,7 +232,7 @@ func (ts *TorrentSession) load() error {
 		}
 	}
 
-	if ts.pieceSet == nil { //Blank slate it is then.
+	if ts.pieceSet == nil { // Blank slate it is then.
 		ts.pieceSet = bitset.NewBitset(ts.totalPieces)
 		log.Printf("[ %s ] Starting from scratch.\n", ts.M.Info.Name)
 	}
@@ -612,15 +612,11 @@ func (ts *TorrentSession) DoTorrent() {
 			}
 			speed := humanSize(float64(ts.Session.Downloaded-lastDownloaded) / heartbeatDuration.Seconds())
 			lastDownloaded = ts.Session.Downloaded
-			log.Printf("[ %s ] Peers: %d downloaded: %d (%s/s) uploaded: %d ratio: %f pieces: %d/%d\n",
-				ts.M.Info.Name,
-				len(ts.peers),
-				ts.Session.Downloaded,
-				speed,
-				ts.Session.Uploaded,
-				ratio,
-				ts.goodPieces,
-				ts.totalPieces)
+			// print status message to STDOUT
+			fmt.Print("\r")
+			fmt.Printf("[ %s ] Peers: %d downloaded: %d (%s/s) uploaded: %d ratio: %f pieces: %d/%d",
+				ts.M.Info.Name, len(ts.peers), ts.Session.Downloaded, speed, ts.Session.Uploaded, ratio, ts.goodPieces, ts.totalPieces)
+
 			if ts.totalPieces != 0 && ts.goodPieces == ts.totalPieces && ratio >= ts.flags.SeedRatio {
 				log.Println("[", ts.M.Info.Name, "] Achieved target seed ratio", ts.flags.SeedRatio)
 				return

@@ -1,13 +1,14 @@
 package file
 
 import (
-	"crypto/md5"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
+
+	"github.com/rasaford/bitsync/torrent/hash"
 )
 
 //Interface for a provider of filesystems.
@@ -34,12 +35,14 @@ func (o OsFsProvider) NewFS(directory string) (fs FileSystem, err error) {
 func (o *osFileSystem) Open(file *FileDict) (File, error) {
 	// Clean the source path before appending to the storePath. This
 	// ensures that source paths that start with ".." can't escape.
-	cleanSrcPath := path.Clean("/" + path.Join(file.Path...))[1:]
-	fullPath := path.Join(o.storePath, cleanSrcPath)
+	cleanSrcPath := filepath.Clean("/" + path.Join(file.Path...))[1:]
+	fullPath := filepath.Join(o.storePath, cleanSrcPath)
 	// err := ensureDirectory(fullPath)
 	// if err != nil {
 	// 	return nil, err
 	// }
+	fmt.Println(fullPath)
+	fmt.Println(cleanSrcPath)
 	osfile := &osFile{fullPath}
 	if err := osfile.ensureExists(file.Length, file.MD5Sum); err != nil {
 		return nil, err
@@ -47,12 +50,14 @@ func (o *osFileSystem) Open(file *FileDict) (File, error) {
 	return osfile, nil
 }
 
+// TODO remove this
+// currently probably required to implement some interface.
 func (o *osFileSystem) Close() error {
 	return nil
 }
 
-func (o *osFile) Close() (err error) {
-	return
+func (o *osFile) Close() error {
+	return nil
 }
 
 func ensureDirectory(fullPath string) error {
@@ -82,18 +87,14 @@ func (o *osFile) ensureExists(length int64, md5Hash string) error {
 		}
 		defer f.Close()
 	} else {
+		log.Println(name)
 		fd, err := os.Open(name)
 		if err != nil {
 			log.Println(err)
 			return nil
 		}
 		defer fd.Close()
-		hash := md5.New()
-		_, err = io.Copy(hash, fd)
-		if err != nil {
-			return err
-		}
-		readMD5 := string(hash.Sum(nil))
+		readMD5 := hash.FileHash(fd)
 		if st.Size() != length && readMD5 != md5Hash {
 			return fmt.Errorf("the file %s exists but is not equal to the indexed one", name)
 		}

@@ -15,7 +15,10 @@ type ExclusionPattern struct {
 func DefaultExPattern() *ExclusionPattern {
 	e := &ExclusionPattern{}
 	// ignore the .bitsync file and all hidden folders
-	e.Add("\\w*.bitsync", "^\\.\\w*")
+	e.Add("\\w*.bitsync",
+		"^\\.\\w*",
+		".*\\s.*",
+	)
 	return e
 }
 

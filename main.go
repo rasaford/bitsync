@@ -3,26 +3,23 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 
 	"github.com/rasaford/bitsync/torrent"
 	"github.com/rasaford/bitsync/torrent/commit"
 )
 
-var (
-	// repositoryName = flag.String("repo", "default", "Name to use when sharing the selected folder. Other peers need to have the same name set in order have access to the repository")
-	file = flag.String("file", "", "this is for debugging purposes only")
-)
-
 func main() {
-	initialize()
-	if *file == "" {
-		dir, err := commit.Create(".")
-		if err != nil {
-			log.Fatal(err)
-		}
-		file = &dir
+	if len(os.Args) < 2 {
+		log.Panic("need to specify a directory for syncing")
 	}
-	torrent.Start(*file)
+	repoDir := os.Args[1]
+	initialize()
+	dir, err := commit.Create(repoDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	torrent.Start(dir)
 }
 
 func initialize() {
