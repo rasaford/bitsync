@@ -2,15 +2,16 @@ package meta
 
 import (
 	"crypto/sha1"
-	"errors"
 	"fmt"
 	"runtime"
+
+	"github.com/pkg/errors"
 
 	"github.com/rasaford/bitsync/torrent/bitset"
 	"github.com/rasaford/bitsync/torrent/file"
 )
 
-func CheckPieces(fs file.FileStore, totalLength int64, m *MetaInfo) (good, bad int, goodBits *bitset.Bitset, err error) {
+func CheckPieces(fs file.BlockHandler, totalLength int64, m *MetaInfo) (good, bad int, goodBits *bitset.Bitset, err error) {
 	pieceLength := m.Info.PieceLength
 	numPieces := int((totalLength + pieceLength - 1) / pieceLength)
 	goodBits = bitset.NewBitset(int(numPieces))
@@ -19,7 +20,7 @@ func CheckPieces(fs file.FileStore, totalLength int64, m *MetaInfo) (good, bad i
 		err = errors.New("Incorrect Info.Pieces length")
 		return
 	}
-	currentSums, err := computeSums(fs, totalLength, m.Info.PieceLength)
+	currentSums, err := hashBlocks(fs, totalLength, m.Info.PieceLength)
 	if err != nil {
 		return
 	}
@@ -45,55 +46,61 @@ func checkEqual(ref, current []byte) bool {
 	return true
 }
 
-type chunk struct {
-	i    int64
-	data []byte
+type block struct {
+	index int64
+	hash  string
 }
 
-// computeSums reads the file content and computes the SHA1 hash for each
-// piece. Spawns parallel goroutines to compute the hashes, since each
-// computation takes ~30ms.
-func computeSums(fs file.FileStore, totalLength int64, pieceLength int64) (sums []byte, err error) {
-	// Calculate the SHA1 hash for each piece in parallel goroutines.
-	hashes := make(chan chunk)
-	results := make(chan chunk, 3)
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
-		go hashPiece(hashes, results)
+// hashBlocks reads all the individual blocks from the BlockHandler and computes it's
+// SHA1 hash.
+func hashBlocks(fs file.BlockHandler, totalLength int64, pieceLength int64) []string {
+	jobs := make(chan int64)
+	results := make(chan block)
+	// spawn workers
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go blockHasher(fs, pieceLength, jobs, results)
 	}
-
-	// Read file content and send to "pieces", keeping order.
+	// TODO validate this equation
 	numPieces := (totalLength + pieceLength - 1) / pieceLength
 	go func() {
 		for i := int64(0); i < numPieces; i++ {
-			piece := make([]byte, pieceLength, pieceLength)
-			if i == numPieces-1 {
-				piece = piece[0 : totalLength-i*pieceLength]
-			}
+			// piece := make([]byte, pieceLength, pieceLength)
+			// if i == numPieces-1 {
+			// 	piece = piece[0 : totalLength-i*pieceLength]
+			// }
 			// Ignore errors.
-			fs.ReadAt(piece, i*pieceLength)
-			hashes <- chunk{i: i, data: piece}
+			jobs <- i
 		}
-		close(hashes)
+		close(jobs)
 	}()
 
 	// Merge back the results.
-	sums = make([]byte, sha1.Size*numPieces)
+	sums := make([]string, numPieces, numPieces)
 	for i := int64(0); i < numPieces; i++ {
-		h := <-results
-		copy(sums[h.i*sha1.Size:], h.data)
+		res := <-results
+		sums[res.index] = res.hash
 	}
-	return
+	return sums
 }
 
-func hashPiece(h chan chunk, result chan chunk) {
+// hashBlock computes the sha1 hash of a block.
+func blockHasher(fs file.BlockHandler, pieceSize int64, jobs <-chan int64, result chan<- block) {
+	// preallocate the hash & cache structure
 	hasher := sha1.New()
-	for piece := range h {
+	cache := make([]byte, pieceSize, pieceSize)
+	for index := range jobs {
 		hasher.Reset()
-		_, err := hasher.Write(piece.data)
+		_, err := fs.ReadBlock(cache, index)
 		if err != nil {
-			result <- chunk{piece.i, nil}
+			result <- block{index: index, hash: ""}
+			continue
+		}
+		_, err = hasher.Write(cache)
+		if err != nil {
+			result <- block{index: index, hash: ""}
 		} else {
-			result <- chunk{piece.i, hasher.Sum(nil)}
+			hash := string(hasher.Sum(nil))
+			result <- block{index: index, hash: hash}
 		}
 	}
 }

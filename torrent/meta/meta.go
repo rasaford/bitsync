@@ -9,7 +9,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -100,7 +99,7 @@ func GetMetaInfo(dialer proxy.Dialer, torrent string) (metaInfo *MetaInfo, err e
 		}
 	}
 
-	// We need to calcuate the sha1 of the Info map, including every value in the
+	// We need to calculate the sha1 of the Info map, including every value in the
 	// map. The easiest way to do this is to read the data using the Decode
 	// API, and then pick through it manually.
 	var m interface{}
@@ -147,115 +146,93 @@ func GetMetaInfo(dialer proxy.Dialer, torrent string) (metaInfo *MetaInfo, err e
 	return
 }
 
-type MetaInfoFileSystem interface {
-	Open(name string) (MetaInfoFile, error)
-	Stat(name string) (os.FileInfo, error)
-}
+// type MetaInfoFile interface {
+// 	io.Closer
+// 	io.Reader
+// 	io.ReaderAt
+// 	Readdirnames(n int) (names []string, err error)
+// 	Stat() (os.FileInfo, error)
+// }
 
-type MetaInfoFile interface {
-	io.Closer
-	io.Reader
-	io.ReaderAt
-	Readdirnames(n int) (names []string, err error)
-	Stat() (os.FileInfo, error)
-}
+// func (f *FileStoreFileSystemAdapter) Open(file *file.FileDict) (file.File, error) {
+// 	ff, err := f.m.Open(path.Join(file.Path...))
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	stat, err := ff.Stat()
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	actualSize := stat.Size()
+// 	if actualSize != file.Length {
+// 		err := fmt.Errorf("Unexpected file size %v. Expected %v", actualSize, file.Length)
+// 		return nil, err
+// 	}
+// 	return &FileStoreFileAdapter{ff}, nil
+// }
 
-type OSMetaInfoFileSystem struct {
-	dir string
-}
+// func (f *FileStoreFileSystemAdapter) Close() error {
+// 	return nil
+// }
 
-func (o *OSMetaInfoFileSystem) Open(name string) (MetaInfoFile, error) {
-	return os.Open(path.Join(o.dir, name))
-}
+// func (f *FileStoreFileAdapter) ReadAt(p []byte, off int64) (n int, err error) {
+// 	return f.f.ReadAt(p, off)
+// }
 
-func (o *OSMetaInfoFileSystem) Stat(name string) (os.FileInfo, error) {
-	return os.Stat(path.Join(o.dir, name))
-}
+// func (f *FileStoreFileAdapter) WriteAt(p []byte, off int64) (n int, err error) {
+// 	// Writes must match existing data exactly.
+// 	q := make([]byte, len(p))
+// 	_, err = f.ReadAt(q, off)
+// 	if err != nil {
+// 		return
+// 	}
+// 	if bytes.Compare(p, q) != 0 {
+// 		err = fmt.Errorf("new data does not match original data")
+// 	}
+// 	return
+// }
 
-// Adapt a MetaInfoFileSystem into a torrent file store FileSystem
-type FileStoreFileSystemAdapter struct {
-	m MetaInfoFileSystem
-}
-
-type FileStoreFileAdapter struct {
-	f MetaInfoFile
-}
-
-func (f *FileStoreFileSystemAdapter) Open(file *file.FileDict) (file.File, error) {
-	ff, err := f.m.Open(path.Join(file.Path...))
-	if err != nil {
-		return nil, err
-	}
-	stat, err := ff.Stat()
-	if err != nil {
-		return nil, err
-	}
-	actualSize := stat.Size()
-	if actualSize != file.Length {
-		err := fmt.Errorf("Unexpected file size %v. Expected %v", actualSize, file.Length)
-		return nil, err
-	}
-	return &FileStoreFileAdapter{ff}, nil
-}
-
-func (f *FileStoreFileSystemAdapter) Close() error {
-	return nil
-}
-
-func (f *FileStoreFileAdapter) ReadAt(p []byte, off int64) (n int, err error) {
-	return f.f.ReadAt(p, off)
-}
-
-func (f *FileStoreFileAdapter) WriteAt(p []byte, off int64) (n int, err error) {
-	// Writes must match existing data exactly.
-	q := make([]byte, len(p))
-	_, err = f.ReadAt(q, off)
-	if err != nil {
-		return
-	}
-	if bytes.Compare(p, q) != 0 {
-		err = fmt.Errorf("new data does not match original data")
-	}
-	return
-}
-
-func (f *FileStoreFileAdapter) Close() (err error) {
-	return f.f.Close()
-}
+// func (f *FileStoreFileAdapter) Close() (err error) {
+// 	return f.f.Close()
+// }
 
 // Create a MetaInfo for a given file and file system.
 // If fs is nil then the OSMetaInfoFileSystem will be used.
 // If pieceLength is 0 then an optimal piece length will be chosen.
-func Index(fs MetaInfoFileSystem, dir, tracker string, pieceSize int64) (*MetaInfo, error) {
+func Index(fs file.FileSystem, dir string, tracker string) (*MetaInfo, error) {
 	if fs == nil {
 		r, f := filepath.Split(dir)
-		fs = &OSMetaInfoFileSystem{r}
+		fs, err := file.NewOSFileSystem(r)
+		if err != nil {
+			return nil, err
+		}
 		dir = f
 	}
 	info := &MetaInfo{}
-	exclusion := DefaultExPattern()
-	var totalLength int64
-	if err := info.addFiles(fs, dir, exclusion); err != nil {
-		return nil, err
-	}
-	for _, fd := range info.Info.Files { // calc total length of all added files
-		totalLength += fd.Length
-	}
-
-	if pieceSize == 0 {
-		pieceSize = choosePieceLength(totalLength)
-	}
-	info.Info.PieceLength = pieceSize
-	fileStoreFS := &FileStoreFileSystemAdapter{fs}
-	fileStore, fsLength, err := file.NewFileStore(&info.Info, fileStoreFS)
+	err := info.addFiles(fs, []string{dir}, DefaultExPattern())
 	if err != nil {
 		return nil, err
 	}
-	if fsLength != totalLength {
-		err = fmt.Errorf("Filestore total length %v, expected %v", fsLength, totalLength)
+
+	// calc total length of all added files
+	var totalLength int64
+	for _, fd := range info.Info.Files {
+		totalLength += fd.Length
+	}
+
+	// compute the optimal piece length for the bitset
+	blockSize := choosePieceLength(totalLength)
+	info.Info.PieceLength = blockSize
+	fileStore, fsLength, err := file.NewBlockStore(&info.Info, fs)
+	if err != nil {
 		return nil, err
 	}
-	sums, err := computeSums(fileStore, totalLength, pieceSize)
+	// why do we need this ?
+	if fsLength != totalLength {
+		err = fmt.Errorf("BlockStore total length %v, expected %v", fsLength, totalLength)
+		return nil, err
+	}
+	sums, err := computeSums(fileStore, totalLength, blockSize)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +279,7 @@ func roundUpToPowerOfTwo(v uint64) uint64 {
 
 func WriteMetaInfoBytes(root, tracker string, w io.Writer) (err error) {
 	var m *MetaInfo
-	m, err = Index(nil, root, tracker, 0)
+	m, err = Index(nil, root, tracker)
 	if err != nil {
 		return
 	}
@@ -314,37 +291,37 @@ func WriteMetaInfoBytes(root, tracker string, w io.Writer) (err error) {
 	return
 }
 
-// addFiles adds all the files below if it does not mathe any of the exclusion patterns.
-func (m *MetaInfo) addFiles(fileSystem MetaInfoFileSystem, dir string, exclusion *ExclusionPattern) error {
-	fileInfo, err := fileSystem.Stat(dir)
+// addFiles adds all the files below the given dir.
+// Computes the sha1 hashes of each of the files.
+func (m *MetaInfo) addFiles(fs file.FileSystem, dir []string, exclusion *ExclusionPattern) error {
+	fileInfo, err := fs.Stat(dir)
 	if err != nil {
 		return err
 	}
-	if fileInfo.IsDir() { // if is dir recurse
-		f, err := fileSystem.Open(dir)
+	if fileInfo.IsDir() { // if is dir recurse to add all the files
+		files, err := fs.List(dir)
 		if err != nil {
-			return err
+			log.Println("cannot list files ", err)
+			return nil
 		}
-		files, err := f.Readdirnames(0)
-		if err != nil {
-			return err
-		}
-		for _, file := range files {
-			// recursively add all files withing the search dir
-			if err := m.addFiles(fileSystem, filepath.Join(dir, file), exclusion); err != nil {
+		for _, f := range files {
+			// recursively add all files within the search dir
+			if err := m.addFiles(fs, append(dir, f), exclusion); err != nil {
 				return err
 			}
 		}
-	} else if !exclusion.Matches(dir) { // only add the file if it does not match any of the exclusion patterns
-		fd, err := fileSystem.Open(dir)
+		// only add the file if it does not match any of the exclusion patterns
+	} else if !exclusion.Matches(dir) {
+		fd, err := fs.Open(dir)
 		if err != nil {
-			return errors.Wrap(err, "open failed")
+			return errors.Wrapf(err, "cannot open file ", dir)
 		}
-		md5 := hash.FileHash(fd)
+		sha1 := hash.SHA1(fd)
+		fd.Close()
 		fileDict := file.FileDict{
-			Length: fileInfo.Size(),
-			Path:   strings.Split(filepath.Clean(dir), string(os.PathSeparator)),
-			MD5Sum: md5,
+			Length:   fileInfo.Size(),
+			Path:     dir,
+			SHA1hash: sha1,
 		}
 		m.Info.Files = append(m.Info.Files, fileDict)
 	}
@@ -431,10 +408,10 @@ type MetaDataExchange struct {
 	Pieces       [][]byte
 }
 
-func TrackerInfo(dialer proxy.Dialer, url string) (tr *TrackerResponse, err error) {
+func TrackerInfo(dialer proxy.Dialer, url string) (*TrackerResponse, error) {
 	r, err := tproxy.HttpGet(dialer, url)
 	if err != nil {
-		return
+		return nil, err
 	}
 	defer r.Body.Close()
 	if r.StatusCode >= 400 {
@@ -442,33 +419,30 @@ func TrackerInfo(dialer proxy.Dialer, url string) (tr *TrackerResponse, err erro
 		reason := "Bad Request " + string(data)
 		log.Println(reason)
 		err = fmt.Errorf(reason)
-		return
+		return nil, err
 	}
-	var tr2 TrackerResponse
-	err = bencode.Unmarshal(r.Body, &tr2)
+	var tr TrackerResponse
+	err = bencode.Unmarshal(r.Body, &tr)
 	r.Body.Close()
 	if err != nil {
-		return
+		return nil, err
 	}
-	tr = &tr2
-	return
+	return &tr, nil
 }
 
-func SaveMetaInfo(metadata string) (err error) {
+func SaveMetaInfo(metadata string) error {
 	var info file.InfoDict
-	err = bencode.Unmarshal(bytes.NewReader([]byte(metadata)), &info)
+	err := bencode.Unmarshal(bytes.NewReader([]byte(metadata)), &info)
 	if err != nil {
-		return
+		return err
 	}
 
 	f, err := os.Create(info.Name + ".torrent")
 	if err != nil {
 		log.Println("Error when opening file for creation: ", err)
-		return
+		return err
 	}
 	defer f.Close()
-
 	_, err = f.WriteString(metadata)
-
-	return
+	return nil
 }

@@ -5,36 +5,39 @@ import (
 	"io"
 )
 
-// Interface for a file.
-// Multiple goroutines may access a File at the same time.
+// BlockHandler is responsible for reading and writing the blocks from and to the filesystem.
+// WritePiece should be called for full, verified pieces only.
+//
+// All files in the store are opened on creation and only closed, once they have been
+// written to entirely.
+type BlockHandler interface {
+	WriteBlock(block []byte, index int64) (int, error)
+	ReadBlock(block []byte, index int64) (int, error)
+	io.Closer
+}
+
+// File is an interface for local reading and writing to a file.
+// All implementations must be goroutine safe.
 type File interface {
 	io.ReaderAt
 	io.WriterAt
+	io.Reader
 	io.Closer
 }
 
-// Interface for a file system. A file system contains files.
-type FileSystem interface {
-	Open(*FileDict) (file File, err error)
-	io.Closer
-}
-
-// A torrent file store.
-// WritePiece should be called for full, verified pieces only;
-type FileStore interface {
-	io.ReaderAt
-	io.Closer
-	WritePiece(buffer []byte, piece int) (written int, err error)
-}
-
-type fileStore struct {
+type blockStore struct {
+	// filesystem is used for reading and writing the data of the blocks to
 	fileSystem FileSystem
-	offsets    []int64
-	files      []fileEntry // Stored in increasing globalOffset order
-	pieceSize  int64
+	// specifies the byte ranges to write each block to
+	offsets []int64
+	// files stores handles to all the files that get wirtten to the filesystem.
+	// They are stored in increasing global offest order.
+	files []fileHandle
+	// blockSize is the size of an individual block.
+	blockSize int64
 }
 
-type fileEntry struct {
+type fileHandle struct {
 	length int64
 	file   File
 }
@@ -47,19 +50,17 @@ const (
 )
 
 type FileDict struct {
-	// Length of the file in bytes
+	// Length of thefile in bytes
 	Length int64
-	Path   []string
-	// base64 encoded md5sum of the file
-	MD5Sum string
+	// relative path from the root
+	Path []string
+	// SHA1hash of the file
+	SHA1hash string
 }
 
-// NewFileStore creates a storage interface to be able to write files to disk
-func NewFileStore(info *InfoDict, fileSystem FileSystem) (FileStore, int64, error) {
-	fs := &fileStore{
-		fileSystem: fileSystem,
-		pieceSize:  info.PieceLength,
-	}
+// NewBlockStore creates a storage interface to be able to write files to disk
+func NewBlockStore(info *InfoDict, fileSystem FileSystem) (BlockHandler, int64, error) {
+	// ensureFilesExist(info.Files, fileSystem)
 	numFiles := len(info.Files)
 	if numFiles == 0 {
 		// Create dummy Files structure.
@@ -68,12 +69,16 @@ func NewFileStore(info *InfoDict, fileSystem FileSystem) (FileStore, int64, erro
 		}
 		numFiles = 1
 	}
-	fs.files = make([]fileEntry, numFiles)
-	fs.offsets = make([]int64, numFiles)
+	fs := &blockStore{
+		fileSystem: fileSystem,
+		offsets:    make([]int64, numFiles),
+		files:      make([]fileHandle, numFiles),
+		blockSize:  info.PieceLength,
+	}
 	// Compare between what's in the InfoDict and on the fileSystem
-	var totalSize int64
+	totalSize := int64(0)
 	for i, src := range info.Files {
-		file, err := fs.fileSystem.Open(&src)
+		file, err := fileSystem.Open(src.Path)
 		if err != nil {
 			// Close all files opened up to now.
 			for j := 0; j < i; j++ {
@@ -89,7 +94,11 @@ func NewFileStore(info *InfoDict, fileSystem FileSystem) (FileStore, int64, erro
 	return fs, totalSize, nil
 }
 
-func (f *fileStore) find(offset int64) int {
+func ensureFilesExist(files []FileDict, fs FileSystem) {
+
+}
+
+func (f *blockStore) find(offset int64) int {
 	// Binary search
 	offsets := f.offsets
 	low := 0
@@ -106,79 +115,83 @@ func (f *fileStore) find(offset int64) int {
 	return low
 }
 
-func (f *fileStore) ReadAt(p []byte, off int64) (n int, err error) {
-	index := f.find(off)
-	for len(p) > 0 && index < len(f.offsets) {
-		chunk := int64(len(p))
-		entry := &f.files[index]
-		itemOffset := off - f.offsets[index]
-		if itemOffset < entry.length {
-			space := entry.length - itemOffset
-			if space < chunk {
-				chunk = space
-			}
-			var nThisTime int
-			nThisTime, err = entry.file.ReadAt(p[0:chunk], itemOffset)
-			n = n + nThisTime
-			if err != nil {
-				return
-			}
-			p = p[nThisTime:]
-			off += int64(nThisTime)
-		}
-		index++
-	}
-	// At this point if there's anything left to read it means we've run off the
-	// end of the file store. Read zeros. This is defined by the bittorrent protocol.
-	for i := range p {
-		p[i] = 0
-	}
-	return
-}
+// func (f *blockStore) ReadAt(p []byte, off int64) (n int, err error) {
+// 	index := f.find(off)
+// 	for len(p) > 0 && index < len(f.offsets) {
+// 		chunk := int64(len(p))
+// 		entry := &f.files[index]
+// 		itemOffset := off - f.offsets[index]
+// 		if itemOffset < entry.length {
+// 			space := entry.length - itemOffset
+// 			if space < chunk {
+// 				chunk = space
+// 			}
+// 			var nThisTime int
+// 			nThisTime, err = entry.file.ReadAt(p[0:chunk], itemOffset)
+// 			n = n + nThisTime
+// 			if err != nil {
+// 				return
+// 			}
+// 			p = p[nThisTime:]
+// 			off += int64(nThisTime)
+// 		}
+// 		index++
+// 	}
+// 	// At this point if there's anything left to read it means we've run off the
+// 	// end of the file store. Read zeros. This is defined by the bittorrent protocol.
+// 	for i := range p {
+// 		p[i] = 0
+// 	}
+// 	return
+// }
 
-func (f *fileStore) WritePiece(p []byte, piece int) (n int, err error) {
-	off := int64(piece) * f.pieceSize
-	index := f.find(off)
-	for len(p) > 0 && index < len(f.offsets) {
-		chunk := int64(len(p))
-		entry := &f.files[index]
-		itemOffset := off - f.offsets[index]
+func (s *blockStore) WriteBlock(cache []byte, piece int64) (n int, err error) {
+	offset := int64(piece) * s.pieceSize
+	index := s.find(offset)
+	for len(cache) > 0 && index < len(s.offsets) {
+		chunk := int64(len(cache))
+		entry := &s.files[index]
+		itemOffset := offset - s.offsets[index]
 		if itemOffset < entry.length {
 			space := entry.length - itemOffset
 			if space < chunk {
 				chunk = space
 			}
 			var nThisTime int
-			nThisTime, err = entry.file.WriteAt(p[0:chunk], itemOffset)
+			nThisTime, err = entry.file.WriteAt(cache[0:chunk], itemOffset)
 			n += nThisTime
 			if err != nil {
 				return
 			}
-			p = p[nThisTime:]
-			off += int64(nThisTime)
+			cache = cache[nThisTime:]
+			offset += int64(nThisTime)
 		}
 		index++
 	}
 	// At this point if there's anything left to write it means we've run off the
 	// end of the file store. Check that the data is zeros.
 	// This is defined by the bittorrent protocol.
-	for i := range p {
-		if p[i] != 0 {
+	for i := range cache {
+		if cache[i] != 0 {
 			err = errors.New("unexpected non-zero data at end of store")
 			n += i
 			return
 		}
 	}
-	n += len(p)
+	n += len(cache)
 	return
 }
 
-func (f *fileStore) Close() (err error) {
+func (f *blockStore) ReadBlock(cache []byte, index int64) (int, error) {
+	return 0, nil
+}
+
+func (f *blockStore) Close() (err error) {
 	for i := range f.files {
 		f.files[i].file.Close()
 	}
-	if f.fileSystem != nil {
-		err = f.fileSystem.Close()
-	}
+	// if f.fileSystem != nil {
+	// 	err = f.fileSystem.Close()
+	// }
 	return
 }

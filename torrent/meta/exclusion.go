@@ -23,9 +23,10 @@ func DefaultExPattern() *ExclusionPattern {
 }
 
 // Matches retruns true if any of the stored patterns match the string
-func (e *ExclusionPattern) Matches(path string) bool {
+func (e *ExclusionPattern) Matches(path []string) bool {
+	p := filepath.Join(path...)
 	for _, pattern := range e.patterns {
-		res, err := regexp.MatchString(pattern, filepath.Clean(path))
+		res, err := regexp.MatchString(pattern, p)
 		if err != nil {
 			log.Printf("cannot match against pattern %s\n", pattern)
 			continue

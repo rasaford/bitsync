@@ -1,17 +1,18 @@
 package hash
 
 import (
-	"crypto/md5"
-	"encoding/base64"
+	"crypto/sha1"
 	"io"
+	"log"
 )
 
-// FileHash returns a base64 encoded version md5 hash of the file at the given reader.
-func FileHash(file io.Reader) string {
-	hash := md5.New()
-	_, err := io.Copy(hash, file)
-	if err != nil {
-		return ""
+// SHA1 returns the sha1 hash of the bytes provided by the reader.
+func SHA1(file io.Reader) string {
+	hash := sha1.New()
+	var b []byte
+	if _, err := file.Read(b); err != nil {
+		log.Fatal("cannot read from the given io.Reader")
 	}
-	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
+	hash.Write(b)
+	return string(hash.Sum(nil))
 }
